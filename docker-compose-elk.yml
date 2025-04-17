@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+      - xpack.security.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    networks:
+      - loggingnet
+    ports:
+      - "9200:9200"
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.4
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5601:5601"
+    links:
+      - elasticsearch:elasticsearch
+    networks:
+      - loggingnet
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.13.4
+    ports:
+      - "12201:12201/udp"
+    deploy:
+      replicas: 2
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    networks:
+      - coinswarmnet
+      - loggingnet
+    links:
+      - elasticsearch:elasticsearch
+    command: logstash -f /usr/share/logstash/pipeline/ --config.reload.automatic
+    depends_on:
+      - elasticsearch
+  rng:
+    image: hhhnam/rng:coinswarm  # Custom image
+    ports:
+      - "8001:80"
+    networks:
+      - coinswarmnet
+    links:
+      - logstash:logstash
+    depends_on:
+      - logstash
+
+
+  hasher:
+    image: hhhnam/hasher:coinswarm  # Custom image
+    ports:
+      - "8002:80"
+    networks:
+      - coinswarmnet
+    links:
+      - logstash:logstash
+    depends_on:
+      - logstash
+
+  webui:
+    image: hhhnam/webui:coinswarm  # Custom image
+    ports:
+      - "8000:80"
+    networks:
+      - coinswarmnet
+    links:
+      - logstash:logstash
+    depends_on:
+      - logstash
+    logging:
+      driver: gelf
+      options:
+        gelf-address: "udp://localhost:12201"
+
+  redis:
+    image: redis  # Official Redis image
+    networks:
+      - coinswarmnet
+
+
+  worker:
+    image: hhhnam/worker:coinswarm  # Custom image
+    environment:
+      - LOGSTASH_HOST=logstash
+      - LOGSTASH_PORT=12201
+      - RNG_HOST=rng
+      - HASHER_HOST=hasher
+      - REDIS_HOST=redis
+      - DEBUG=yes
+    networks:
+      - coinswarmnet
+    links:
+      - logstash:logstash
+    depends_on:
+      - logstash
+
+configs:
+  logstash_config:
+    file: ./logstash.conf
+
+volumes:
+  esdata:
+    driver: local
+  logstash-pipeline:
+    driver: local
+
+networks:
+  loggingnet:
+    driver: overlay
+  coinswarmnet:
+    driver: overlay
